@@ -99,6 +99,14 @@ const ExerciseDB = (() => {
       .map(([name]) => name);
   }
 
+  async function getLastByName(name) {
+    const entries = await getByName(name);
+    if (entries.length === 0) return null;
+    return entries.reduce((latest, e) =>
+      new Date(e.created_at) > new Date(latest.created_at) ? e : latest
+    );
+  }
+
   async function remove(id) {
     const db = await open();
     return new Promise((resolve, reject) => {
@@ -163,5 +171,5 @@ const ExerciseDB = (() => {
     return { synced: 0 };
   }
 
-  return { open, add, getAll, getByName, getNames, remove, getUnsynced, sync };
+  return { open, add, getAll, getByName, getLastByName, getNames, remove, getUnsynced, sync };
 })();

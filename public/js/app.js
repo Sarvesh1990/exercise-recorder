@@ -1,31 +1,87 @@
-/**
- * Main application logic.
- * Handles form interaction, voice input, tabs, sync, and rendering.
- */
 (async () => {
+
   // --- Elements ---
-  const form = document.getElementById('exercise-form');
-  const nameInput = document.getElementById('exercise-name');
-  const weightInput = document.getElementById('weight');
-  const setsInput = document.getElementById('sets');
-  const repsInput = document.getElementById('reps');
-  const unitSelect = document.getElementById('unit');
-  const notesInput = document.getElementById('notes');
-  const voiceBtn = document.getElementById('voice-btn');
-  const suggestions = document.getElementById('exercise-suggestions');
-  const recentDiv = document.getElementById('recent-entries');
-  const historyList = document.getElementById('history-list');
+  const headerMain    = document.getElementById('header-main');
+  const headerBack    = document.getElementById('header-back');
+  const backBtn       = document.getElementById('back-btn');
+  const headerCatName = document.getElementById('header-cat-name');
+  const catGrid       = document.getElementById('cat-grid');
+  const viewCats      = document.getElementById('view-cats');
+  const viewExs       = document.getElementById('view-exs');
+  const exList        = document.getElementById('ex-list');
+
+  // Log sheet
+  const backdrop    = document.getElementById('sheet-backdrop');
+  const logSheet    = document.getElementById('log-sheet');
+  const sheetExName = document.getElementById('sheet-ex-name');
+  const sheetExLast = document.getElementById('sheet-ex-last');
+  const sheetWeight = document.getElementById('sheet-weight');
+  const sheetSets   = document.getElementById('sheet-sets');
+  const sheetReps   = document.getElementById('sheet-reps');
+  const sheetSave   = document.getElementById('sheet-save');
+
+  // Add exercise sheet
+  const addSheet    = document.getElementById('add-sheet');
+  const addSheetSub = document.getElementById('add-sheet-sub');
+  const addCatPicker= document.getElementById('add-cat-picker');
+  const addExInput  = document.getElementById('add-ex-input');
+  const addExSave   = document.getElementById('add-ex-save');
+
+  // History / Charts
+  const historyList   = document.getElementById('history-list');
   const historySearch = document.getElementById('history-search');
-  const chartSelect = document.getElementById('chart-exercise');
-  const chartCanvas = document.getElementById('progression-chart');
+  const chartSelect   = document.getElementById('chart-exercise');
+  const chartCanvas   = document.getElementById('progression-chart');
   const chartStatsDiv = document.getElementById('chart-stats');
-  const syncStatus = document.getElementById('sync-status');
-  const toastEl = document.getElementById('toast');
+  const syncStatus    = document.getElementById('sync-status');
+  const toastEl       = document.getElementById('toast');
+
+  // --- Exercise Library ---
+  const DEFAULT_EXERCISES = {
+    'Chest':     ['Bench Press','Incline Bench','Decline Bench','DB Fly','Cable Fly','Push-Up','Dips','Chest Press'],
+    'Back':      ['Deadlift','Pull-Up','Lat Pulldown','Seated Row','Bent Over Row','T-Bar Row','Single Arm Row','Face Pull','Hyperextension'],
+    'Shoulders': ['Overhead Press','DB Shoulder Press','Lateral Raise','Front Raise','Rear Delt Fly','Arnold Press','Shrugs','Upright Row'],
+    'Legs':      ['Squat','Leg Press','Romanian Deadlift','Leg Extension','Leg Curl','Lunges','Calf Raise','Hack Squat','Bulgarian Split Squat'],
+    'Arms':      ['Barbell Curl','Dumbbell Curl','Hammer Curl','Preacher Curl','Tricep Pushdown','Skull Crusher','Overhead Tricep','Close Grip Bench'],
+    'Core':      ['Plank','Crunch','Cable Crunch','Leg Raise','Russian Twist','Ab Rollout','Side Plank'],
+  };
+
+  const CAT_META = {
+    'Chest':     { emoji: '🫁', color: '#ff5c7a' },
+    'Back':      { emoji: '🏹', color: '#4895ef' },
+    'Shoulders': { emoji: '🏋️', color: '#a78bfa' },
+    'Legs':      { emoji: '🦵', color: '#34d399' },
+    'Arms':      { emoji: '💪', color: '#fb923c' },
+    'Core':      { emoji: '⚡', color: '#fbbf24' },
+  };
+
+  // Custom exercises stored in localStorage: { Chest: ['My Ex'], ... }
+  function loadCustomExercises() {
+    try { return JSON.parse(localStorage.getItem('customExercises') || '{}'); } catch { return {}; }
+  }
+  function saveCustomExercises(obj) {
+    localStorage.setItem('customExercises', JSON.stringify(obj));
+  }
+  function getExercisesForCat(cat) {
+    const custom = loadCustomExercises();
+    return [...DEFAULT_EXERCISES[cat], ...(custom[cat] || [])];
+  }
+  function addCustomExercise(cat, name) {
+    const custom = loadCustomExercises();
+    if (!custom[cat]) custom[cat] = [];
+    if (!custom[cat].includes(name)) custom[cat].push(name);
+    saveCustomExercises(custom);
+  }
+
+  // --- State ---
+  let currentCategory = null;
+  let currentExercise = null;
+  let selectedUnit    = 'kg';
+  let addingForCat    = null; // which cat the add-sheet is for (null = from home)
 
   // --- Init ---
   await ExerciseDB.open();
-  loadSuggestions();
-  renderRecent();
+  renderCategories();
   updateSyncBadge();
   attemptSync();
 
@@ -36,193 +92,257 @@
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
       tab.classList.add('active');
       document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-
+      if (tab.dataset.tab === 'record') updateHeader();
+      else { headerMain.classList.remove('hidden'); headerBack.classList.add('hidden'); }
       if (tab.dataset.tab === 'history') loadHistory();
-      if (tab.dataset.tab === 'charts') loadChartExercises();
+      if (tab.dataset.tab === 'charts')  loadChartExercises();
     });
   });
 
-  // --- Form Submit ---
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const entry = {
-      name: nameInput.value.trim(),
-      weight: weightInput.value,
-      sets: setsInput.value,
-      reps: repsInput.value,
-      unit: unitSelect.value,
-      notes: notesInput.value.trim()
-    };
+  function updateHeader() {
+    const inEx = viewExs.classList.contains('active');
+    headerMain.classList.toggle('hidden', inEx);
+    headerBack.classList.toggle('hidden', !inEx);
+    if (inEx) headerCatName.textContent = currentCategory;
+  }
 
-    if (!entry.name || !entry.weight) return;
+  // ─────────────────────────────────
+  //  Screen 1 — Category Grid
+  // ─────────────────────────────────
+  async function renderCategories() {
+    catGrid.innerHTML = Object.entries(DEFAULT_EXERCISES).map(([cat]) => {
+      const m = CAT_META[cat];
+      return `
+        <button class="cat-card" data-cat="${cat}" style="--cat-color:${m.color}">
+          <span class="cat-emoji">${m.emoji}</span>
+          <span class="cat-name">${cat}</span>
+          <span class="cat-sub">${getExercisesForCat(cat).length} exercises</span>
+        </button>`;
+    }).join('') + `
+      <button class="cat-card cat-custom" id="custom-ex-btn">
+        <span class="cat-plus-icon">+</span>
+        <span class="cat-name">Custom Exercise</span>
+      </button>`;
 
-    await ExerciseDB.add(entry);
-    toast('Exercise saved! 💪', 'success');
+    catGrid.querySelectorAll('.cat-card:not(.cat-custom)').forEach(btn => {
+      btn.addEventListener('click', () => openCategory(btn.dataset.cat));
+    });
+    document.getElementById('custom-ex-btn').addEventListener('click', () => openAddSheet(null));
+  }
 
-    nameInput.value = '';
-    weightInput.value = '';
-    setsInput.value = '';
-    repsInput.value = '';
-    notesInput.value = '';
-    nameInput.focus();
+  // ─────────────────────────────────
+  //  Screen 2 — Exercise List
+  // ─────────────────────────────────
+  async function openCategory(cat) {
+    currentCategory = cat;
 
-    loadSuggestions();
-    renderRecent();
+    const all    = await ExerciseDB.getAll();
+    const lastMap = {};
+    all.forEach(e => {
+      const n = e.name;
+      if (!lastMap[n] || new Date(e.created_at) > new Date(lastMap[n].created_at)) lastMap[n] = e;
+    });
+
+    const exercises = getExercisesForCat(cat);
+    exList.innerHTML = exercises.map(ex => {
+      const last    = lastMap[ex.toLowerCase()];
+      const lastStr = last
+        ? `${last.weight}${last.unit}${last.sets ? ' · ' + last.sets + '×' + (last.reps || '?') : ''}`
+        : 'No history';
+      return `
+        <button class="ex-row" data-name="${ex}">
+          <div class="ex-row-info">
+            <span class="ex-row-name">${ex}</span>
+            <span class="ex-row-last">${lastStr}</span>
+          </div>
+          <span class="ex-chevron">›</span>
+        </button>`;
+    }).join('') + `
+      <button class="ex-add-row" id="add-to-cat-btn">
+        <span class="ex-add-icon">+</span>
+        Add exercise to ${cat}
+      </button>`;
+
+    exList.querySelectorAll('.ex-row').forEach(row => {
+      row.addEventListener('click', () => openLogSheet(row.dataset.name));
+    });
+    document.getElementById('add-to-cat-btn').addEventListener('click', () => openAddSheet(cat));
+
+    viewCats.classList.remove('active');
+    viewExs.classList.add('active');
+    updateHeader();
+  }
+
+  backBtn.addEventListener('click', () => {
+    closeLogSheet();
+    closeAddSheet();
+    viewExs.classList.remove('active');
+    viewCats.classList.add('active');
+    currentCategory = null;
+    updateHeader();
+    renderCategories();
+  });
+
+  // ─────────────────────────────────
+  //  Log Sheet
+  // ─────────────────────────────────
+  async function openLogSheet(exerciseName) {
+    currentExercise = exerciseName;
+    const last = await ExerciseDB.getLastByName(exerciseName);
+
+    sheetExName.textContent = exerciseName;
+
+    if (last) {
+      const d = new Date(last.created_at);
+      const ds = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      sheetExLast.textContent = `Last: ${ds} · ${last.weight}${last.unit}${last.sets ? ' · ' + last.sets + '×' + (last.reps || '?') : ''}`;
+      sheetWeight.value = last.weight;
+      sheetSets.value   = last.sets || '';
+      sheetReps.value   = last.reps || '';
+      setUnit(last.unit);
+    } else {
+      sheetExLast.textContent = 'First time — enter your weight';
+      sheetWeight.value = '';
+      sheetSets.value   = '';
+      sheetReps.value   = '';
+      setUnit('kg');
+    }
+
+    backdrop.classList.add('open');
+    logSheet.classList.add('open');
+    setTimeout(() => { sheetWeight.focus(); sheetWeight.select(); }, 320);
+  }
+
+  function closeLogSheet() {
+    logSheet.classList.remove('open');
+    if (!addSheet.classList.contains('open')) backdrop.classList.remove('open');
+    currentExercise = null;
+  }
+
+  // Unit toggle
+  function setUnit(unit) {
+    selectedUnit = unit;
+    document.querySelectorAll('.unit-opt').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.unit === unit);
+    });
+  }
+  document.querySelectorAll('.unit-opt').forEach(btn => {
+    btn.addEventListener('click', () => setUnit(btn.dataset.unit));
+  });
+
+  // Adjust chips
+  document.querySelectorAll('.adj-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const delta = parseFloat(chip.dataset.delta);
+      const cur   = parseFloat(sheetWeight.value) || 0;
+      const next  = Math.max(0, cur + delta);
+      sheetWeight.value = +next.toFixed(2);
+    });
+  });
+
+  // Steppers for sets/reps
+  document.querySelectorAll('.sr-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const input = document.getElementById(btn.dataset.target);
+      const delta = parseInt(btn.dataset.delta);
+      const cur   = parseInt(input.value) || 0;
+      input.value = Math.max(1, cur + delta);
+    });
+  });
+
+  // Save
+  sheetSave.addEventListener('click', async () => {
+    if (!sheetWeight.value) { sheetWeight.focus(); return; }
+    const name = currentExercise;
+    await ExerciseDB.add({
+      name, weight: sheetWeight.value,
+      sets: sheetSets.value, reps: sheetReps.value,
+      unit: selectedUnit, notes: '',
+    });
+    toast('Saved 💪', 'success');
+    closeLogSheet();
+    openCategory(currentCategory);
     attemptSync();
   });
 
-  // --- Voice Input (Web Speech API) ---
-  let recognition = null;
-  if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
-
-    recognition.onresult = (e) => {
-      const transcript = e.results[0][0].transcript;
-      const parsed = parseVoiceInput(transcript);
-      if (parsed.name) nameInput.value = parsed.name;
-      if (parsed.weight) weightInput.value = parsed.weight;
-      if (parsed.unit) unitSelect.value = parsed.unit;
-      if (parsed.reps) repsInput.value = parsed.reps;
-      if (parsed.sets) setsInput.value = parsed.sets;
-      voiceBtn.classList.remove('listening');
-      toast(`Heard: "${transcript}"`, 'info');
-    };
-
-    recognition.onerror = () => {
-      voiceBtn.classList.remove('listening');
-      toast('Voice recognition failed. Try again.', 'error');
-    };
-
-    recognition.onend = () => voiceBtn.classList.remove('listening');
-  } else {
-    voiceBtn.style.display = 'none';
-  }
-
-  voiceBtn.addEventListener('click', () => {
-    if (!recognition) return;
-    if (voiceBtn.classList.contains('listening')) {
-      recognition.stop();
-    } else {
-      recognition.start();
-      voiceBtn.classList.add('listening');
-    }
+  backdrop.addEventListener('click', () => {
+    closeLogSheet();
+    closeAddSheet();
   });
 
-  function parseVoiceInput(text) {
-    const result = {};
-    const lower = text.toLowerCase().trim();
+  // ─────────────────────────────────
+  //  Add Exercise Sheet
+  // ─────────────────────────────────
+  function openAddSheet(cat) {
+    addingForCat = cat;
+    addExInput.value = '';
 
-    // Extract weight + unit: "80 kg", "135 lbs", "100 pounds"
-    const weightMatch = lower.match(/(\d+\.?\d*)\s*(kg|kgs|kilograms?|lbs?|pounds?)/);
-    if (weightMatch) {
-      result.weight = parseFloat(weightMatch[1]);
-      result.unit = weightMatch[2].startsWith('lb') || weightMatch[2].startsWith('pound') ? 'lbs' : 'kg';
-    }
-
-    // Extract reps: "10 reps"
-    const repMatch = lower.match(/(\d+)\s*reps?/);
-    if (repMatch) result.reps = parseInt(repMatch[1]);
-
-    // Extract sets: "3 sets"
-    const setMatch = lower.match(/(\d+)\s*sets?/);
-    if (setMatch) result.sets = parseInt(setMatch[1]);
-
-    // Exercise name: everything remaining after removing matched fragments
-    let name = lower;
-    if (weightMatch) name = name.replace(weightMatch[0], '');
-    if (repMatch) name = name.replace(repMatch[0], '');
-    if (setMatch) name = name.replace(setMatch[0], '');
-    name = name.replace(/\b(for|at|with|of|and|times?|x)\b/g, '').trim();
-    name = name.replace(/\s+/g, ' ').trim();
-    if (name) result.name = name;
-
-    // Bare number fallback
-    if (!result.weight) {
-      const bareNum = lower.match(/(\d+\.?\d*)/);
-      if (bareNum) result.weight = parseFloat(bareNum[1]);
-    }
-
-    return result;
-  }
-
-  // --- Autocomplete Suggestions ---
-  async function loadSuggestions() {
-    const names = await ExerciseDB.getNames();
-    suggestions.innerHTML = '';
-    names.forEach(n => {
-      const opt = document.createElement('option');
-      opt.value = n;
-      suggestions.appendChild(opt);
-    });
-  }
-
-  // --- Recent Entries ---
-  async function renderRecent() {
-    const all = await ExerciseDB.getAll();
-    const recent = all.slice(0, 10);
-
-    if (recent.length === 0) {
-      recentDiv.innerHTML = `
-        <div class="empty-state">
-          <div class="emoji">🏋️</div>
-          <p>No exercises recorded yet.<br>Add your first one above!</p>
-        </div>`;
-      return;
-    }
-
-    recentDiv.innerHTML = recent.map(e => `
-      <div class="entry-card" data-id="${e.id}">
-        <div class="entry-info">
-          <h4>${esc(e.name)}</h4>
-          <span class="meta">
-            ${e.sets ? e.sets + ' × ' : ''}${e.reps ? e.reps + ' reps' : ''}
-            ${e.notes ? ' · ' + esc(e.notes) : ''}
-            <br>${timeAgo(e.created_at)}
-            ${e.synced ? '' : ' · <em>pending sync</em>'}
-          </span>
-        </div>
-        <div class="entry-actions">
-          <span class="entry-weight">${e.weight}<span class="unit-label"> ${e.unit}</span></span>
-          <button class="delete-btn" data-id="${e.id}">✕ Delete</button>
-        </div>
-      </div>
-    `).join('');
-
-    recentDiv.querySelectorAll('.delete-btn').forEach(btn => {
-      btn.addEventListener('click', async (ev) => {
-        ev.stopPropagation();
-        await ExerciseDB.remove(btn.dataset.id);
-        toast('Entry deleted', 'info');
-        renderRecent();
-        loadSuggestions();
+    // Build category picker (shown only when coming from home, not from a specific cat)
+    if (cat === null) {
+      addSheetSub.textContent = 'Choose a category';
+      addCatPicker.style.display = 'flex';
+      addCatPicker.innerHTML = Object.keys(DEFAULT_EXERCISES).map(c => `
+        <button class="add-cat-pill${addingForCat === c ? ' active' : ''}" data-cat="${c}">${c}</button>
+      `).join('');
+      addCatPicker.querySelectorAll('.add-cat-pill').forEach(p => {
+        p.addEventListener('click', () => {
+          addingForCat = p.dataset.cat;
+          addCatPicker.querySelectorAll('.add-cat-pill').forEach(x => x.classList.remove('active'));
+          p.classList.add('active');
+          addSheetSub.textContent = `Adding to ${addingForCat}`;
+        });
       });
-    });
+    } else {
+      addSheetSub.textContent = `Adding to ${cat}`;
+      addCatPicker.style.display = 'none';
+    }
+
+    backdrop.classList.add('open');
+    addSheet.classList.add('open');
+    setTimeout(() => addExInput.focus(), 320);
   }
 
-  // --- History Tab ---
-  async function loadHistory() {
-    const all = await ExerciseDB.getAll();
-    const search = historySearch.value.toLowerCase();
-    const filtered = search ? all.filter(e => e.name.includes(search)) : all;
+  function closeAddSheet() {
+    addSheet.classList.remove('open');
+    if (!logSheet.classList.contains('open')) backdrop.classList.remove('open');
+  }
 
-    if (filtered.length === 0) {
+  addExSave.addEventListener('click', async () => {
+    const name = addExInput.value.trim();
+    if (!name) { addExInput.focus(); return; }
+    if (!addingForCat) { toast('Pick a category first', 'error'); return; }
+
+    addCustomExercise(addingForCat, name);
+    closeAddSheet();
+
+    // Navigate to that category and open the log sheet
+    await openCategory(addingForCat);
+    openLogSheet(name);
+  });
+
+  addExInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') addExSave.click();
+  });
+
+  // ─────────────────────────────────
+  //  History Tab
+  // ─────────────────────────────────
+  async function loadHistory() {
+    const all    = await ExerciseDB.getAll();
+    const search = historySearch.value.toLowerCase();
+    const list   = search ? all.filter(e => e.name.includes(search)) : all;
+
+    if (list.length === 0) {
       historyList.innerHTML = `<div class="empty-state"><div class="emoji">📋</div><p>No entries found.</p></div>`;
       return;
     }
-
     const groups = {};
-    filtered.forEach(e => {
+    list.forEach(e => {
       const day = new Date(e.created_at).toLocaleDateString('en-US', {
         weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
       });
-      if (!groups[day]) groups[day] = [];
-      groups[day].push(e);
+      (groups[day] = groups[day] || []).push(e);
     });
-
     historyList.innerHTML = Object.entries(groups).map(([day, entries]) => `
       <div class="date-group">
         <div class="date-label">${day}</div>
@@ -230,140 +350,78 @@
           <div class="entry-card">
             <div class="entry-info">
               <h4>${esc(e.name)}</h4>
-              <span class="meta">
-                ${e.sets ? e.sets + ' × ' : ''}${e.reps ? e.reps + ' reps' : ''}
-                ${e.notes ? ' · ' + esc(e.notes) : ''}
-              </span>
+              <span class="meta">${e.sets ? e.sets + ' × ' : ''}${e.reps ? e.reps + ' reps' : ''}${e.notes ? ' · ' + esc(e.notes) : ''}</span>
             </div>
             <span class="entry-weight">${e.weight}<span class="unit-label"> ${e.unit}</span></span>
-          </div>
-        `).join('')}
-      </div>
-    `).join('');
+          </div>`).join('')}
+      </div>`).join('');
   }
-
   historySearch.addEventListener('input', loadHistory);
 
-  // --- Charts Tab ---
+  // ─────────────────────────────────
+  //  Charts Tab
+  // ─────────────────────────────────
   async function loadChartExercises() {
     const names = await ExerciseDB.getNames();
-    chartSelect.innerHTML = '<option value="">-- Choose an exercise --</option>';
+    chartSelect.innerHTML = '<option value="">— choose —</option>';
     names.forEach(n => {
-      const opt = document.createElement('option');
-      opt.value = n;
-      opt.textContent = n;
-      chartSelect.appendChild(opt);
+      const o = document.createElement('option');
+      o.value = o.textContent = n;
+      chartSelect.appendChild(o);
     });
   }
-
   chartSelect.addEventListener('change', async () => {
     const name = chartSelect.value;
-    if (!name) {
-      const ctx = chartCanvas.getContext('2d');
-      ctx.clearRect(0, 0, chartCanvas.width, chartCanvas.height);
-      chartStatsDiv.innerHTML = '';
-      return;
-    }
-
-    const data = await ExerciseDB.getByName(name);
+    if (!name) { chartCanvas.getContext('2d').clearRect(0,0,chartCanvas.width,chartCanvas.height); chartStatsDiv.innerHTML=''; return; }
+    const data  = await ExerciseDB.getByName(name);
     ExerciseChart.draw(chartCanvas, data);
-
     const stats = ExerciseChart.calcStats(data);
     if (stats) {
       chartStatsDiv.innerHTML = `
-        <div class="stat-card">
-          <div class="stat-value">${stats.max}</div>
-          <div class="stat-label">Max Weight</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">${stats.latest}</div>
-          <div class="stat-label">Latest</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">${stats.change}</div>
-          <div class="stat-label">Progress</div>
-        </div>
-      `;
+        <div class="stat-card"><div class="stat-value">${stats.max}</div><div class="stat-label">Max</div></div>
+        <div class="stat-card"><div class="stat-value">${stats.latest}</div><div class="stat-label">Latest</div></div>
+        <div class="stat-card"><div class="stat-value">${stats.change}</div><div class="stat-label">Change</div></div>`;
     }
   });
-
-  // Redraw chart on window resize
-  let resizeTimer;
+  let _rt;
   window.addEventListener('resize', () => {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      if (chartSelect.value) chartSelect.dispatchEvent(new Event('change'));
-    }, 200);
+    clearTimeout(_rt);
+    _rt = setTimeout(() => { if (chartSelect.value) chartSelect.dispatchEvent(new Event('change')); }, 200);
   });
 
-  // --- Online/Offline Sync ---
+  // ─────────────────────────────────
+  //  Sync
+  // ─────────────────────────────────
   async function attemptSync() {
     if (!navigator.onLine) return;
     updateSyncBadge('syncing');
     try {
-      const result = await ExerciseDB.sync();
-      if (result.synced > 0) {
-        toast(`Synced ${result.synced} entries to server`, 'success');
-        renderRecent();
-      }
-    } catch (e) {
-      console.warn('Sync error:', e);
-    }
+      const r = await ExerciseDB.sync();
+      if (r.synced > 0) toast(`Synced ${r.synced} entries`, 'success');
+    } catch(e) { console.warn('Sync error:', e); }
     updateSyncBadge();
   }
-
   function updateSyncBadge(state) {
-    const label = syncStatus.querySelector('.label');
-    syncStatus.classList.remove('offline', 'syncing');
-
-    if (state === 'syncing') {
-      syncStatus.classList.add('syncing');
-      label.textContent = 'Syncing...';
-    } else if (!navigator.onLine) {
-      syncStatus.classList.add('offline');
-      label.textContent = 'Offline';
-    } else {
-      label.textContent = 'Online';
-    }
+    const lbl = syncStatus.querySelector('.label');
+    syncStatus.classList.remove('offline','syncing');
+    if (state === 'syncing')    { syncStatus.classList.add('syncing'); lbl.textContent = 'Syncing'; }
+    else if (!navigator.onLine) { syncStatus.classList.add('offline'); lbl.textContent = 'Offline'; }
+    else                        { lbl.textContent = 'Online'; }
   }
+  window.addEventListener('online',  () => { updateSyncBadge(); attemptSync(); });
+  window.addEventListener('offline', () => updateSyncBadge());
+  setInterval(() => { if (navigator.onLine) attemptSync(); }, 60000);
 
-  window.addEventListener('online', () => {
-    updateSyncBadge();
-    toast('Back online! Syncing...', 'info');
-    attemptSync();
-  });
-
-  window.addEventListener('offline', () => {
-    updateSyncBadge();
-    toast("You're offline. Data saved locally.", 'info');
-  });
-
-  // Periodic sync every 60s
-  setInterval(() => {
-    if (navigator.onLine) attemptSync();
-  }, 60000);
-
-  // --- Utilities ---
-  function esc(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  function timeAgo(iso) {
-    const d = new Date(iso);
-    const diff = Date.now() - d;
-    if (diff < 60000) return 'Just now';
-    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
-    if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
-    if (diff < 604800000) return d.toLocaleDateString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' });
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  }
+  // ─────────────────────────────────
+  //  Utils
+  // ─────────────────────────────────
+  function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
 
   function toast(msg, type = 'info') {
     toastEl.textContent = msg;
-    toastEl.className = 'toast ' + type;
-    clearTimeout(toastEl._timer);
-    toastEl._timer = setTimeout(() => toastEl.classList.add('hidden'), 2500);
+    toastEl.className   = 'toast ' + type;
+    clearTimeout(toastEl._t);
+    toastEl._t = setTimeout(() => toastEl.classList.add('hidden'), 2500);
   }
+
 })();
